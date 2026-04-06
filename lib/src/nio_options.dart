@@ -36,6 +36,12 @@ class NioOptions {
   /// Attach a [CancelToken] to abort this request.
   final CancelToken? cancelToken;
 
+  /// When [NioConfig.offlineQueue] is set, store this call if the device has no
+  /// connection ([DioExceptionType.connectionError]) and the method is queueable.
+  ///
+  /// Overrides [OfflineQueueSettings.defaultQueueWhenOffline] for this call only.
+  final bool queueWhenOffline;
+
   const NioOptions({
     this.requiresAuth = false,
     this.maxRetries = 0,
@@ -46,6 +52,7 @@ class NioOptions {
     this.extraHeaders,
     this.timeout,
     this.cancelToken,
+    this.queueWhenOffline = false,
   });
 
   NioOptions copyWith({
@@ -58,6 +65,7 @@ class NioOptions {
     Map<String, dynamic>? extraHeaders,
     Duration? timeout,
     CancelToken? cancelToken,
+    bool? queueWhenOffline,
   }) {
     return NioOptions(
       requiresAuth: requiresAuth ?? this.requiresAuth,
@@ -69,6 +77,7 @@ class NioOptions {
       extraHeaders: extraHeaders ?? this.extraHeaders,
       timeout: timeout ?? this.timeout,
       cancelToken: cancelToken ?? this.cancelToken,
+      queueWhenOffline: queueWhenOffline ?? this.queueWhenOffline,
     );
   }
 }

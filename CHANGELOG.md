@@ -1,3 +1,14 @@
+## 0.0.3
+
+- **Offline request queue**: pluggable `OfflineQueueStorage` — `MemoryOfflineQueueStorage`,
+  `createOfflineFileQueueStorage` (VM / native; not web), or your own implementation.
+- New `NioErrorType.queuedOffline`, `OfflineQueueSettings` on `NioConfig`,
+  `NioOptions.queueWhenOffline`, `peekOfflineQueue`, `clearOfflineQueue`,
+  `flushOfflineQueue` with `OfflineFlushResult`.
+- Each `PendingOfflineRequest` stores `apiBaseUrl` so replay targets the correct host.
+- Docs: README (pub.dev layout + offline section), example `example/example.dart`.
+- License / metadata credit: Niral Panchal.
+
 ## 0.0.2
 
 - Fix pub.dev scoring: point `homepage` / `repository` at the real GitHub repo

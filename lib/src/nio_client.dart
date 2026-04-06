@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import 'api_result.dart';
@@ -10,6 +12,7 @@ import 'nio_config.dart';
 import 'nio_error.dart';
 import 'nio_mock.dart';
 import 'nio_options.dart';
+import 'offline/pending_offline_request.dart';
 
 /// The main entry point for all network calls.
 ///
@@ -32,6 +35,8 @@ class Nio {
 
   final NioMockInterceptor _mockInterceptor = NioMockInterceptor();
   late final CacheInterceptor _cacheInterceptor;
+
+  int _offlineIdSeq = 0;
 
   Nio({required this.config}) {
     _dio = Dio(
@@ -288,6 +293,84 @@ class Nio {
   void invalidateCache(String path) => _cacheInterceptor.invalidate(path);
 
   // ══════════════════════════════════════════════════════════════════
+  // Offline queue
+  // ══════════════════════════════════════════════════════════════════
+
+  /// Pending requests (oldest first). Empty if [NioConfig.offlineQueue] is null.
+  Future<List<PendingOfflineRequest>> peekOfflineQueue() async {
+    final q = config.offlineQueue;
+    if (q == null) return const [];
+    final list = await q.storage.loadAll();
+    list.sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+    return List.unmodifiable(list);
+  }
+
+  /// Drop every stored offline request.
+  Future<void> clearOfflineQueue() async {
+    await config.offlineQueue?.storage.saveAll([]);
+  }
+
+  /// Replay queued requests in order against each item's saved [PendingOfflineRequest.apiBaseUrl].
+  ///
+  /// Call this when you know the device is online (e.g. after
+  /// `Connectivity().onConnectivityChanged` fires, or on app resume).
+  ///
+  /// Mutating requests (`POST` / `PUT` / …) may run **more than once** if the server
+  /// already applied them — design idempotent endpoints where possible.
+  Future<OfflineFlushResult> flushOfflineQueue() async {
+    final settings = config.offlineQueue;
+    if (settings == null) return OfflineFlushResult.empty;
+
+    var pending = await settings.storage.loadAll();
+    pending.sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+
+    var succeeded = 0;
+    var failed = 0;
+    final stillPending = <PendingOfflineRequest>[];
+
+    for (final item in pending) {
+      final nioOpts = NioOptions(
+        requiresAuth: item.requiresAuth,
+        extraHeaders: item.extraHeaders,
+        queueWhenOffline: false,
+        showErrorMessage: false,
+        maxRetries: 0,
+      );
+
+      final base = item.apiBaseUrl.isEmpty ? config.baseUrl : item.apiBaseUrl;
+
+      try {
+        final ro = RequestOptions(
+          baseUrl: base,
+          path: item.path,
+          method: item.method,
+          data: item.body,
+          queryParameters: item.queryParameters,
+          headers: item.extraHeaders == null ? {} : Map.from(item.extraHeaders!),
+          sendTimeout: nioOpts.timeout,
+          receiveTimeout: nioOpts.timeout,
+          extra: {nioOptionsKey: nioOpts},
+        );
+        await _dio.fetch(ro);
+        succeeded++;
+      } on DioException {
+        failed++;
+        stillPending.add(item);
+      } catch (_) {
+        failed++;
+        stillPending.add(item);
+      }
+    }
+
+    await settings.storage.saveAll(stillPending);
+    return OfflineFlushResult(
+      succeeded: succeeded,
+      failed: failed,
+      remaining: stillPending.length,
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════
   // Internal
   // ══════════════════════════════════════════════════════════════════
 
@@ -318,6 +401,21 @@ class Nio {
 
       return _parseResponse(response, fromJson);
     } on DioException catch (e) {
+      if (await _tryEnqueueOffline(
+        e,
+        method: method,
+        path: path,
+        body: body,
+        queryParameters: queryParameters,
+        nioOpts: nioOpts,
+      )) {
+        const queued = NioError(
+          type: NioErrorType.queuedOffline,
+          message: 'Request saved to offline queue',
+        );
+        _notifyError(queued, nioOpts);
+        return const Failure(queued);
+      }
       return _handleDioError(e, nioOpts);
     } catch (e, st) {
       return _handleUnexpected(e, st, nioOpts);
@@ -375,6 +473,69 @@ class Nio {
     config.onError?.call(error);
     if (options.showErrorMessage && config.showError != null) {
       config.showError!(error.userMessage);
+    }
+  }
+
+  String _nextOfflineId() =>
+      '${DateTime.now().microsecondsSinceEpoch}_${_offlineIdSeq++}';
+
+  bool _canSerializeOfflineBody(dynamic body) {
+    if (body == null) return true;
+    if (body is FormData) return false;
+    try {
+      jsonEncode(body);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _tryEnqueueOffline(
+    DioException e, {
+    required String method,
+    required String path,
+    required dynamic body,
+    required Map<String, dynamic>? queryParameters,
+    required NioOptions nioOpts,
+  }) async {
+    final settings = config.offlineQueue;
+    if (settings == null) return false;
+    if (e.type != DioExceptionType.connectionError) return false;
+
+    final wantQueue = nioOpts.queueWhenOffline || settings.defaultQueueWhenOffline;
+    if (!wantQueue) return false;
+
+    final m = method.toUpperCase();
+    if (!settings.queueableMethods.contains(m)) return false;
+    if (!_canSerializeOfflineBody(body)) return false;
+
+    late List<PendingOfflineRequest> existing;
+    try {
+      existing = await settings.storage.loadAll();
+    } catch (_) {
+      return false;
+    }
+    if (existing.length >= settings.maxPending) return false;
+
+    try {
+      final req = PendingOfflineRequest(
+        apiBaseUrl: config.baseUrl,
+        id: _nextOfflineId(),
+        method: m,
+        path: path,
+        queryParameters: queryParameters,
+        body: body,
+        extraHeaders: nioOpts.extraHeaders == null
+            ? null
+            : Map<String, dynamic>.from(nioOpts.extraHeaders!),
+        requiresAuth: nioOpts.requiresAuth,
+        createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+      );
+      await settings.storage.saveAll([...existing, req]);
+      settings.onRequestQueued?.call(req);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 }

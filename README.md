@@ -4,6 +4,12 @@ A powerful, developer-friendly networking layer built on top of [Dio](https://pu
 
 Nio eliminates boilerplate, centralizes API handling, and gives you a scalable, production-ready architecture for Flutter (and Dart) apps.
 
+### What you see on pub.dev
+
+When someone opens **`nio`** on [pub.dev](https://pub.dev), they land on this **README** first — install snippet, features, and code samples. The **Versions** tab lists each release; **Scores** reflects analysis and documentation depth; **Example** shows the file under `example/` in the package (run it locally with `dart run example/example.dart`). The **Repository** link comes from your `pubspec.yaml` `repository` / `homepage` fields.
+
+**Author:** Niral.
+
 ## Why Nio?
 
 Working directly with Dio means repeating the same patterns in every project — try/catch blocks, status code checks, token management, error mapping.
@@ -19,6 +25,7 @@ Nio handles all of that so you can focus on your app.
 | Error types | One `DioException` catch-all | `NioErrorType` enum (network, timeout, unauthorized, ...) |
 | List parsing | `.map().toList()` every time | `getList<User>(...)` |
 | Testing | Mock the whole Dio | `nio.mock('/path', data: ...)` |
+| Offline queue | Build it yourself | Pluggable storage + `flushOfflineQueue()` — **no** SharedPreferences |
 
 ---
 
@@ -28,7 +35,7 @@ Add Nio to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  nio: ^0.0.1
+  nio: ^0.0.3
 ```
 
 Then run:
@@ -528,6 +535,75 @@ final result = await future;
 
 ---
 
+## Offline request queue
+
+When there is **no connection**, Dio surfaces `DioExceptionType.connectionError`. Nio can **store** mutating requests (`POST` / `PUT` / `PATCH` / `DELETE` by default) and **replay** them later.
+
+* **No SharedPreferences** — you choose storage:
+  * `MemoryOfflineQueueStorage` — in RAM (good for tests or short sessions).
+  * `createOfflineFileQueueStorage('/path/to/queue.json')` — JSON file on disk (Dart **VM** / Flutter **mobile & desktop**; not on **web**).
+  * Implement `OfflineQueueStorage` yourself (Hive, SQLite, encrypted file, etc.).
+* Each queued item saves the **`baseUrl` snapshot** from when it was queued, so replay hits the same API host.
+* Body must be **JSON-serializable** (maps, lists, strings, …). **`FormData` / file uploads are not queued** (extend with your own storage if you need that).
+
+### Setup
+
+```dart
+final offlineStore = MemoryOfflineQueueStorage();
+
+final nio = Nio(
+  config: NioConfig(
+    baseUrl: 'https://api.example.com',
+    offlineQueue: OfflineQueueSettings(
+      storage: offlineStore,
+      defaultQueueWhenOffline: true, // or set per call — see below
+      maxPending: 100,
+      onRequestQueued: (req) => print('Queued ${req.method} ${req.path}'),
+    ),
+  ),
+);
+```
+
+### Per-request opt-in
+
+```dart
+await nio.post('/notes', body: {'text': 'Hello'},
+  options: NioOptions(queueWhenOffline: true),
+);
+```
+
+If the device is offline, you get `NioErrorType.queuedOffline` and the request is persisted.
+
+### Flush when back online
+
+Hook this to connectivity / app-resume (e.g. `connectivity_plus`, or your own reachability check):
+
+```dart
+final result = await nio.flushOfflineQueue();
+print('Sent ${result.succeeded}, failed ${result.failed}, still pending ${result.remaining}');
+```
+
+```dart
+final pending = await nio.peekOfflineQueue();
+await nio.clearOfflineQueue(); // discard everything
+```
+
+**Caveat:** Replayed `POST` calls may execute **twice** if the server already applied them — prefer **idempotent** APIs or server-side deduplication keys when using the queue.
+
+### File storage example (Flutter / CLI)
+
+```dart
+import 'dart:io';
+
+// Example: app documents directory from path_provider in Flutter
+final path = '${Directory.systemTemp.path}/nio_offline_queue.json';
+final storage = createOfflineFileQueueStorage(path);
+```
+
+On **web**, use `MemoryOfflineQueueStorage` or your own `OfflineQueueStorage`.
+
+---
+
 ## Escape Hatch — Access Dio Directly
 
 For anything Nio doesn't cover, you have full access to the underlying Dio instance:
@@ -557,6 +633,7 @@ lib/
     ├── nio_error.dart                ← NioError + NioErrorType
     ├── error_handler.dart            ← DioException → NioError mapping
     ├── nio_mock.dart                 ← Mock interceptor for testing
+    ├── offline/                      ← Offline queue (storage + pending model)
     └── interceptors/
         ├── auth_interceptor.dart     ← Token attach + 401 refresh
         ├── retry_interceptor.dart    ← Exponential backoff retry
@@ -609,4 +686,5 @@ Auth, retry, timeout handling, and error mapping are all handled by the config y
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE). Copyright Niral Panchal.
+

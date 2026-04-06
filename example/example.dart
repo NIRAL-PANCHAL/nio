@@ -17,7 +17,10 @@
 //   7. Result handling patterns
 //   8. Custom error handlers
 //   9. Testing with mocks
+//  10. Offline request queue (memory + JSON file)
 // ---------------------------------------------------------------
+
+import 'dart:io';
 
 import 'package:nio/nio.dart';
 
@@ -304,6 +307,89 @@ Future<void> main() async {
   );
 
   nio.clearMocks();
+
+  // ── Offline queue — custom storage (no SharedPreferences) ───────
+  // Use MemoryOfflineQueueStorage for tests / short-lived sessions, or
+  // createOfflineFileQueueStorage('/path/queue.json') on VM / native Flutter.
+  // Each queued row stores [PendingOfflineRequest.apiBaseUrl] so replay hits
+  // the same host you used when the request was created.
+  print('\n=== Offline queue (connection error) ===');
+  final offlineMem = MemoryOfflineQueueStorage();
+  final deadHostNio = Nio(
+    config: NioConfig(
+      baseUrl: 'http://127.0.0.1:1',
+      connectTimeout: const Duration(milliseconds: 400),
+      receiveTimeout: const Duration(milliseconds: 400),
+      offlineQueue: OfflineQueueSettings(
+        storage: offlineMem,
+        defaultQueueWhenOffline: true,
+        onRequestQueued: (req) => print('📥 Queued: ${req.method} ${req.path}'),
+      ),
+    ),
+  );
+  final offlineResult = await deadHostNio.post(
+    '/posts',
+    body: {'title': 'Saved while offline', 'userId': 1},
+  );
+  offlineResult.when(
+    success: (_) {},
+    failure: (err) {
+      if (err.type == NioErrorType.queuedOffline) {
+        print('✅ ${err.userMessage}');
+      } else {
+        print('❌ ${err.message}');
+      }
+    },
+  );
+  print('Pending in memory: ${(await offlineMem.loadAll()).length}');
+
+  // Flush sends each item to its saved apiBaseUrl. Here we seed a request that
+  // points at JSONPlaceholder so you can see a successful replay on Wi‑Fi.
+  print('\n=== Offline queue flush (sample) ===');
+  final flushStore = MemoryOfflineQueueStorage();
+  await flushStore.saveAll([
+    PendingOfflineRequest(
+      apiBaseUrl: 'https://jsonplaceholder.typicode.com',
+      id: 'example-seed',
+      method: 'POST',
+      path: '/posts',
+      queryParameters: null,
+      body: {'title': 'Replayed after offline', 'body': '— Niral', 'userId': 1},
+      extraHeaders: null,
+      requiresAuth: false,
+      createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+    ),
+  ]);
+  final onlineNio = Nio(
+    config: NioConfig(
+      baseUrl: 'https://jsonplaceholder.typicode.com',
+      offlineQueue: OfflineQueueSettings(
+        storage: flushStore,
+        defaultQueueWhenOffline: false,
+      ),
+    ),
+  );
+  final flushed = await onlineNio.flushOfflineQueue();
+  print('Flush: ${flushed.succeeded} ok, ${flushed.failed} failed, ${flushed.remaining} left');
+
+  // Optional: persist queue yourself with a plain JSON file (Flutter: pick a path
+  // under the app documents directory instead of systemTemp).
+  final filePath = '${Directory.systemTemp.path}/nio_example_offline.json';
+  final fileBacked = createOfflineFileQueueStorage(filePath);
+  await fileBacked.saveAll([
+    PendingOfflineRequest(
+      apiBaseUrl: 'https://jsonplaceholder.typicode.com',
+      id: 'demo-1',
+      method: 'POST',
+      path: '/posts',
+      queryParameters: null,
+      body: {'title': 'File queue demo', 'body': 'Niral', 'userId': 1},
+      extraHeaders: null,
+      requiresAuth: false,
+      createdAtMillis: DateTime.now().millisecondsSinceEpoch,
+    ),
+  ]);
+  print('Wrote demo queue to: $filePath');
 
   print('\n🎉 All examples completed!');
 }

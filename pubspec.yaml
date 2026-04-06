@@ -1,8 +1,9 @@
 name: nio
 description: >
   A powerful, developer-friendly networking layer built on top of Dio.
-  Less code, typed results, auto auth refresh, retries, caching — all in one.
-version: 0.0.2
+  Less code, typed results, auto auth refresh, retries, caching, offline queue — all in one.
+  By Niral.
+version: 0.0.3
 homepage: https://github.com/NIRAL-PANCHAL/nio
 repository: https://github.com/NIRAL-PANCHAL/nio
 issue_tracker: https://github.com/NIRAL-PANCHAL/nio/issues

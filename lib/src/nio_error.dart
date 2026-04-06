@@ -9,6 +9,8 @@ enum NioErrorType {
   badRequest,
   server,
   decode,
+  /// Request was stored in the offline queue; call [Nio.flushOfflineQueue] when online.
+  queuedOffline,
   unknown,
 }
 
@@ -46,6 +48,8 @@ class NioError implements Exception {
           'Invalid request. Please check your input.',
         NioErrorType.server => 'Server error. Please try again later.',
         NioErrorType.decode => 'Failed to process server response.',
+        NioErrorType.queuedOffline =>
+          "You're offline — we saved this request and will send it when you're back online.",
         NioErrorType.unknown => 'Something went wrong. Please try again.',
       };
 

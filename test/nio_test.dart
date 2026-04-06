@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:nio/nio.dart';
 import 'package:test/test.dart';
 
@@ -86,6 +88,9 @@ void main() {
 
       const auth = NioError(type: NioErrorType.unauthorized, message: 'test');
       expect(auth.userMessage, contains('log in'));
+
+      const q = NioError(type: NioErrorType.queuedOffline, message: 'queued');
+      expect(q.userMessage, contains('offline'));
     });
 
     test('toString includes type and message', () {
@@ -171,6 +176,76 @@ void main() {
       expect(opts.maxRetries, 0);
       expect(opts.cache, isFalse);
       expect(opts.showErrorMessage, isTrue);
+      expect(opts.queueWhenOffline, isFalse);
+    });
+  });
+
+  group('Offline queue', () {
+    test('MemoryOfflineQueueStorage roundtrip', () async {
+      final s = MemoryOfflineQueueStorage();
+      const req = PendingOfflineRequest(
+        apiBaseUrl: 'https://a.com',
+        id: '1',
+        method: 'POST',
+        path: '/x',
+        queryParameters: null,
+        body: {'k': 1},
+        extraHeaders: null,
+        requiresAuth: false,
+        createdAtMillis: 42,
+      );
+      await s.saveAll([req]);
+      final loaded = await s.loadAll();
+      expect(loaded.length, 1);
+      expect(loaded.first.path, '/x');
+      expect(loaded.first.apiBaseUrl, 'https://a.com');
+    });
+
+    test('file storage roundtrip on VM', () async {
+      final dir = Directory.systemTemp.createTempSync('nio_offline_test');
+      final path = '${dir.path}/queue.json';
+      final storage = createOfflineFileQueueStorage(path);
+      const req = PendingOfflineRequest(
+        apiBaseUrl: 'https://api.test',
+        id: 'i1',
+        method: 'PUT',
+        path: '/items',
+        queryParameters: {'p': '1'},
+        body: {'name': 'Niral'},
+        extraHeaders: {'X-Test': '1'},
+        requiresAuth: true,
+        createdAtMillis: 100,
+      );
+      await storage.saveAll([req]);
+      final again = createOfflineFileQueueStorage(path);
+      final loaded = await again.loadAll();
+      expect(loaded.length, 1);
+      expect(loaded.first.body, {'name': 'Niral'});
+    });
+
+    test('queues POST when connection fails', () async {
+      final mem = MemoryOfflineQueueStorage();
+      final nio = Nio(
+        config: NioConfig(
+          baseUrl: 'http://127.0.0.1:1',
+          connectTimeout: const Duration(milliseconds: 400),
+          receiveTimeout: const Duration(milliseconds: 400),
+          offlineQueue: OfflineQueueSettings(
+            storage: mem,
+            defaultQueueWhenOffline: true,
+          ),
+        ),
+      );
+      final r = await nio.post<Map<String, dynamic>>(
+        '/posts',
+        body: {'title': 'offline'},
+      );
+      expect(r.isFailure, isTrue);
+      expect(r.errorOrNull?.type, NioErrorType.queuedOffline);
+      final pending = await mem.loadAll();
+      expect(pending.length, 1);
+      expect(pending.first.method, 'POST');
+      expect(pending.first.apiBaseUrl, 'http://127.0.0.1:1');
     });
   });
 }

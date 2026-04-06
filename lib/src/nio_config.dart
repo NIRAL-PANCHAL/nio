@@ -1,5 +1,6 @@
 import 'nio_error.dart';
 import 'nio_options.dart';
+import 'offline/offline_queue_settings.dart';
 
 /// Callback that returns the current auth token (or null).
 typedef TokenProvider = Future<String?> Function();
@@ -46,6 +47,9 @@ class NioConfig {
   /// Defaults applied to every request unless overridden per-call.
   final NioOptions defaultOptions;
 
+  /// Optional offline queue (custom [OfflineQueueStorage] — no SharedPreferences).
+  final OfflineQueueSettings? offlineQueue;
+
   const NioConfig({
     required this.baseUrl,
     this.connectTimeout = const Duration(seconds: 30),
@@ -60,5 +64,6 @@ class NioConfig {
     this.enableLogging = false,
     this.statusErrors,
     this.defaultOptions = const NioOptions(),
+    this.offlineQueue,
   });
 }
