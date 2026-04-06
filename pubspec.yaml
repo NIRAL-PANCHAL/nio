@@ -1,0 +1,24 @@
+name: nio
+description: >
+  A powerful, developer-friendly networking layer built on top of Dio.
+  Less code, typed results, auto auth refresh, retries, caching — all in one.
+version: 0.0.2
+homepage: https://github.com/NIRAL-PANCHAL/nio
+repository: https://github.com/NIRAL-PANCHAL/nio
+issue_tracker: https://github.com/NIRAL-PANCHAL/nio/issues
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  dio: ^5.7.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.1.0
+
+# Helps discovery on pub.dev — see https://dart.dev/tools/pub/pubspec#topics
+topics:
+  - http
+  - network
+  - dio
